@@ -1,170 +1,125 @@
-# 1
-# Task1
-fitness_center/
-├── app.py
-├── config.py
-├── models.py
-└── requirements.txt
-
-import os
-
-basedir = os.path.abspath(os.path.dirname(__file__))
-
-class Config:
-    SQLALCHEMY_DATABASE_URI = 'mysql+mysqlconnector://root:your_password@localhost/fitness_center_db'
-    SQLALCHEMY_TRACK_MODIFICATIONS = False
-
-from flask import Flask
+from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from config import Config
+from flask_marshmallow import Marshmallow
 
 app = Flask(__name__)
-app.config.from_object(Config)
 
+# Database configuration
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+mysqlconnector://root:your_password@localhost/fitness_center_db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Initialize the database and Marshmallow
 db = SQLAlchemy(app)
+ma = Marshmallow(app)
 
-from models import Member, WorkoutSession
-
-if __name__ == '__main__':
-    app.run(debug=True)
-
-from app import db
-
+# Define the Member model
 class Member(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    phone = db.Column(db.String(15), unique=True, nullable=False)
+    email = db.Column(db.String(100), unique=True, nullable=False)
+    joined_at = db.Column(db.DateTime, nullable=False)
 
+# Define the WorkoutSession model
 class WorkoutSession(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     member_id = db.Column(db.Integer, db.ForeignKey('member.id'), nullable=False)
-    date = db.Column(db.DateTime, nullable=False)
+    session_date = db.Column(db.DateTime, nullable=False)
+    duration = db.Column(db.Integer, nullable=False)  # Duration in minutes
     type = db.Column(db.String(50), nullable=False)
-    duration = db.Column(db.Integer, nullable=False)
 
-    member = db.relationship('Member', backref=db.backref('sessions', lazy=True))
+# Marshmallow Schemas for serializing data
+class MemberSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = Member
+        load_instance = True
 
-# Task 2
-from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from config import Config
+class WorkoutSessionSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = WorkoutSession
+        load_instance = True
 
-app = Flask(__name__)
-app.config.from_object(Config)
-db = SQLAlchemy(app)
+# Initialize schemas
+member_schema = MemberSchema()
+members_schema = MemberSchema(many=True)
+workout_session_schema = WorkoutSessionSchema()
+workout_sessions_schema = WorkoutSessionSchema(many=True)
 
-from models import Member, WorkoutSession
-
+# Route to create a new member (POST)
 @app.route('/members', methods=['POST'])
 def add_member():
-    data = request.get_json()
-    new_member = Member(name=data['name'], email=data['email'], phone=data['phone'])
+    name = request.json['name']
+    email = request.json['email']
+    joined_at = request.json['joined_at']
+    
+    new_member = Member(name=name, email=email, joined_at=joined_at)
     db.session.add(new_member)
     db.session.commit()
-    return jsonify({'message': 'New member added successfully'}), 201
+    
+    return member_schema.jsonify(new_member)
 
+# Route to get all members (GET)
 @app.route('/members', methods=['GET'])
 def get_members():
-    members = Member.query.all()
-    return jsonify([{'id': m.id, 'name': m.name, 'email': m.email, 'phone': m.phone} for m in members])
+    all_members = Member.query.all()
+    return members_schema.jsonify(all_members)
 
-@app.route('/members/<int:id>', methods=['GET'])
-def get_member(id):
-    member = Member.query.get(id)
-    if not member:
-        return jsonify({'message': 'Member not found'}), 404
-    return jsonify({'id': member.id, 'name': member.name, 'email': member.email, 'phone': member.phone})
-
-@app.route('/members/<int:id>', methods=['PUT'])
+# Route to update a member (PUT)
+@app.route('/members/<id>', methods=['PUT'])
 def update_member(id):
-    data = request.get_json()
     member = Member.query.get(id)
+    
     if not member:
-        return jsonify({'message': 'Member not found'}), 404
-    member.name = data.get('name', member.name)
-    member.email = data.get('email', member.email)
-    member.phone = data.get('phone', member.phone)
+        return jsonify({"error": "Member not found"}), 404
+    
+    member.name = request.json['name']
+    member.email = request.json['email']
+    
     db.session.commit()
-    return jsonify({'message': 'Member updated successfully'})
+    
+    return member_schema.jsonify(member)
 
-@app.route('/members/<int:id>', methods=['DELETE'])
+# Route to delete a member (DELETE)
+@app.route('/members/<id>', methods=['DELETE'])
 def delete_member(id):
     member = Member.query.get(id)
+    
     if not member:
-        return jsonify({'message': 'Member not found'}), 404
+        return jsonify({"error": "Member not found"}), 404
+    
     db.session.delete(member)
     db.session.commit()
-    return jsonify({'message': 'Member deleted successfully'})
+    
+    return jsonify({"message": "Member deleted successfully"})
 
+# Route to create a workout session (POST)
+@app.route('/workout_sessions', methods=['POST'])
+def add_workout_session():
+    member_id = request.json['member_id']
+    session_date = request.json['session_date']
+    duration = request.json['duration']
+    type = request.json['type']
+    
+    new_session = WorkoutSession(member_id=member_id, session_date=session_date, duration=duration, type=type)
+    db.session.add(new_session)
+    db.session.commit()
+    
+    return workout_session_schema.jsonify(new_session)
+
+# Route to get all workout sessions (GET)
+@app.route('/workout_sessions', methods=['GET'])
+def get_workout_sessions():
+    all_sessions = WorkoutSession.query.all()
+    return workout_sessions_schema.jsonify(all_sessions)
+
+# Route to get all workout sessions for a specific member (GET)
+@app.route('/members/<id>/workout_sessions', methods=['GET'])
+def get_workout_sessions_for_member(id):
+    sessions = WorkoutSession.query.filter_by(member_id=id).all()
+    if not sessions:
+        return jsonify({"error": "No sessions found for this member"}), 404
+    
+    return workout_sessions_schema.jsonify(sessions)
+
+# Ensure app.run is at the end
 if __name__ == '__main__':
     app.run(debug=True)
-
-# Task 3
-@app.route('/workouts', methods=['POST'])
-def schedule_workout():
-    data = request.get_json()
-    new_workout = WorkoutSession(
-        member_id=data['member_id'], 
-        date=data['date'], 
-        type=data['type'], 
-        duration=data['duration']
-    )
-    db.session.add(new_workout)
-    db.session.commit()
-    return jsonify({'message': 'Workout session scheduled successfully'}), 201
-
-@app.route('/workouts', methods=['GET'])
-def get_workouts():
-    workouts = WorkoutSession.query.all()
-    return jsonify([{
-        'id': w.id, 
-        'member_id': w.member_id, 
-        'date': w.date, 
-        'type': w.type, 
-        'duration': w.duration
-    } for w in workouts])
-
-@app.route('/workouts/<int:id>', methods=['GET'])
-def get_workout(id):
-    workout = WorkoutSession.query.get(id)
-    if not workout:
-        return jsonify({'message': 'Workout session not found'}), 404
-    return jsonify({
-        'id': workout.id, 
-        'member_id': workout.member_id, 
-        'date': workout.date, 
-        'type': workout.type, 
-        'duration': workout.duration
-    })
-
-@app.route('/workouts/<int:id>', methods=['PUT'])
-def update_workout(id):
-    data = request.get_json()
-    workout = WorkoutSession.query.get(id)
-    if not workout:
-        return jsonify({'message': 'Workout session not found'}), 404
-    workout.date = data.get('date', workout.date)
-    workout.type = data.get('type', workout.type)
-    workout.duration = data.get('duration', workout.duration)
-    db.session.commit()
-    return jsonify({'message': 'Workout session updated successfully'})
-
-@app.route('/workouts/<int:id>', methods=['DELETE'])
-def delete_workout(id):
-    workout = WorkoutSession.query.get(id)
-    if not workout:
-        return jsonify({'message': 'Workout session not found'}), 404
-    db.session.delete(workout)
-    db.session.commit()
-    return jsonify({'message': 'Workout session deleted successfully'})
-
-@app.route('/members/<int:member_id>/workouts', methods=['GET'])
-def get_member_workouts(member_id):
-    workouts = WorkoutSession.query.filter_by(member_id=member_id).all()
-    return jsonify([{
-        'id': w.id, 
-        'date': w.date, 
-        'type': w.type, 
-        'duration': w.duration
-    } for w in workouts])
